@@ -28,13 +28,12 @@ struct scan_tile_state {
   enum status {
     status_unavailable,
     status_local,
-    status_inclusive
+    status_cumulative
   };
 
   struct descriptor {
     T local = {};
-    T inclusive = {};
-    T exclusive = {};
+    T cumulative = {};
     std::atomic<status> state = status_unavailable;
   };
 
@@ -45,8 +44,8 @@ struct scan_tile_state {
   void set_local_prefix(std::uint32_t i, T local) {
     if (i == 0) {
       prefixes[i].local = local;
-      prefixes[i].inclusive = local;
-      prefixes[i].state.store(status_inclusive,
+      prefixes[i].cumulative = local;
+      prefixes[i].state.store(status_cumulative,
                               std::memory_order_release);
     } else {
       prefixes[i].local = local;
@@ -56,7 +55,8 @@ struct scan_tile_state {
     prefixes[i].state.notify_all();
   }
 
-  T get_exclusive_prefix(std::uint32_t i) {
+  T get_predecessor_prefix(std::uint32_t i) {
+    T predecessor_prefix = {};
     for (auto p = i - 1; p >= 0; --p) {
       auto state = prefixes[p].state.load(std::memory_order_acquire);
       while (state == status_unavailable) {
@@ -65,40 +65,44 @@ struct scan_tile_state {
         state = prefixes[p].state.load(std::memory_order_acquire);
       }
       if (state == status_local) {
-        prefixes[i].exclusive = prefixes[p].local
-                              + prefixes[i].exclusive;
-      } else if (state == status_inclusive) {
-        prefixes[i].exclusive = prefixes[p].inclusive
-                              + prefixes[i].exclusive;
+        predecessor_prefix = prefixes[p].local
+                           + predecessor_prefix;
+      } else if (state == status_cumulative) {
+        predecessor_prefix = prefixes[p].cumulative
+                           + predecessor_prefix;
         break;
       }
     }
 
-    prefixes[i].inclusive = prefixes[i].exclusive
-                          + prefixes[i].local;
-    prefixes[i].state.store(status_inclusive,
+    prefixes[i].cumulative = predecessor_prefix
+                           + prefixes[i].local;
+    prefixes[i].state.store(status_cumulative,
                             std::memory_order_release);
     prefixes[i].state.notify_all();
 
-    return prefixes[i].exclusive;
+    return predecessor_prefix;
   }
 };
 
 void inclusive_scan(stdr::range auto&& in, std::uint32_t num_tiles) {
   scan_tile_state<stdr::range_value_t<decltype(in)>> sts(num_tiles);
 
+  std::atomic<uint32_t> tile_counter(0);
+
   auto all_tiles = stdv::iota(0U, num_tiles);
   std::for_each(stde::par, begin(all_tiles), end(all_tiles),
-    [&] (std::uint32_t tile) {
+    [&] (auto) {
+      auto tile = tile_counter.fetch_add(1, std::memory_order_release);
+
       auto sub_in = range_for_tile(in, tile, num_tiles);
 
       sts.set_local_prefix(tile,
         *--std::inclusive_scan(begin(sub_in), end(sub_in), begin(sub_in)));
 
       if (tile != 0) {
-        auto exc = sts.get_exclusive_prefix(tile);
+        auto pred = sts.get_predecessor_prefix(tile);
         std::for_each(begin(sub_in), end(sub_in),
-          [&] (auto& e) { e = exc + e; });
+          [&] (auto& e) { e = pred + e; });
       }
     });
 }
