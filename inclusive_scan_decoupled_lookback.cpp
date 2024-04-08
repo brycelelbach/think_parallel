@@ -87,7 +87,7 @@ struct scan_tile_state {
 void inclusive_scan(stdr::range auto&& in, std::uint32_t num_tiles) {
   scan_tile_state<stdr::range_value_t<decltype(in)>> sts(num_tiles);
 
-  std::atomic<uint32_t> tile_counter(0);
+  std::atomic<std::uint32_t> tile_counter(0);
 
   auto all_tiles = stdv::iota(0U, num_tiles);
   std::for_each(stde::par, begin(all_tiles), end(all_tiles),
