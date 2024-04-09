@@ -16,7 +16,9 @@ using stdr::begin;
 using stdr::end;
 using stdr::size;
 
-auto range_for_tile(stdr::range auto&& in, std::uint32_t tile, std::uint32_t num_tiles) {
+auto range_for_tile(stdr::range auto&& in,
+                    std::uint32_t tile,
+                    std::uint32_t num_tiles) {
   auto tile_size = (size(in) + num_tiles - 1) / num_tiles;
   auto start     = std::min(tile * tile_size, size(in));
   auto end       = std::min((tile + 1) * tile_size, size(in));
@@ -84,7 +86,32 @@ struct scan_tile_state {
   }
 };
 
-void inclusive_scan(stdr::range auto&& in, std::uint32_t num_tiles) {
+auto inclusive_scan_upsweep_downsweep = [] (stdr::range auto&& in,
+                                            stdr::range auto&& out,
+                                            std::uint32_t num_tiles) {
+  std::vector<stdr::range_value_t<decltype(in)>> predecessors(num_tiles);
+
+  auto all_tiles = stdv::iota(0U, num_tiles);
+  std::for_each(stde::par_unseq, begin(all_tiles), end(all_tiles),
+    [&] (std::uint32_t tile) {
+      auto sub_in  = range_for_tile(in, tile, num_tiles);
+      auto sub_out = range_for_tile(out, tile, num_tiles);
+      predecessors[tile] = *--std::inclusive_scan(begin(sub_in), end(sub_in), begin(sub_out));
+    });
+
+  std::inclusive_scan(begin(predecessors), end(predecessors), begin(predecessors));
+
+  auto subsequent_tiles = stdv::iota(1U, num_tiles);
+  std::for_each(stde::par_unseq, begin(subsequent_tiles), end(subsequent_tiles),
+    [&] (std::uint32_t tile) {
+      auto sub_out = range_for_tile(out, tile, num_tiles);
+      stdr::for_each(sub_out, [&] (auto& e) { e = predecessors[tile - 1] + e; });
+    });
+};
+
+auto inclusive_scan_decoupled_lookback = [] (stdr::range auto&& in,
+                                             stdr::range auto&& out,
+                                             std::uint32_t num_tiles) {
   scan_tile_state<stdr::range_value_t<decltype(in)>> sts(num_tiles);
 
   std::atomic<std::uint32_t> tile_counter(0);
@@ -94,18 +121,18 @@ void inclusive_scan(stdr::range auto&& in, std::uint32_t num_tiles) {
     [&] (auto) {
       auto tile = tile_counter.fetch_add(1, std::memory_order_release);
 
-      auto sub_in = range_for_tile(in, tile, num_tiles);
+      auto sub_in  = range_for_tile(in, tile, num_tiles);
+      auto sub_out = range_for_tile(out, tile, num_tiles);
 
       sts.set_local_prefix(tile,
-        *--std::inclusive_scan(begin(sub_in), end(sub_in), begin(sub_in)));
+        *--std::inclusive_scan(begin(sub_in), end(sub_in), begin(sub_out)));
 
       if (tile != 0) {
         auto pred = sts.get_predecessor_prefix(tile);
-        std::for_each(begin(sub_in), end(sub_in),
-          [&] (auto& e) { e = pred + e; });
+        stdr::for_each(sub_out, [&] (auto& e) { e = pred + e; });
       }
     });
-}
+};
 
 int main(int argc, char** argv) {
   std::uint32_t num_elements = 1024 * 1024 * 1024;
@@ -119,12 +146,12 @@ int main(int argc, char** argv) {
   if (argc > 3)
     validate = std::string_view("true") == std::string_view(argv[3]);
 
-  std::cout << "num_elements, " << num_elements << "\n";
-  std::cout << "num_tiles, " << num_tiles << "\n";
-  std::cout << "validate, " << validate << "\n";
+  std::cout << "Number of Elements, " << num_elements << "\n";
+  std::cout << "Number of Tiles, " << num_tiles << "\n";
+  std::cout << "Validate, " << std::boolalpha << validate << "\n";
+  std::cout << "\n";
 
   std::vector<std::uint32_t> in(num_elements);
-
   auto all_tiles = stdv::iota(0U, num_tiles);
   std::for_each(stde::par, begin(all_tiles), end(all_tiles),
     [&] (std::uint32_t tile) {
@@ -136,25 +163,35 @@ int main(int argc, char** argv) {
       stdr::generate(sub_in, [&] { return dis(gen); });
     });
 
-  std::vector<std::uint32_t> gold;
+  std::vector<std::uint32_t> out(num_elements);
 
+  std::vector<std::uint32_t> gold;
   if (validate) {
     gold.resize(num_elements);
     std::inclusive_scan(begin(in), end(in), begin(gold));
   }
 
-  auto start = std::chrono::high_resolution_clock::now();
+  std::cout << "Benchmark, Time [s]\n";
 
-  inclusive_scan(in, num_tiles);
+  auto benchmark = [&] (auto f, std::string_view name) {
+    auto start = std::chrono::high_resolution_clock::now();
 
-  auto finish = std::chrono::high_resolution_clock::now();
+    f(in, out, num_tiles);
 
-  std::chrono::duration<double> diff = finish - start;
-  std::cout << diff.count() << " [s]\n";
+    auto finish = std::chrono::high_resolution_clock::now();
 
-  if (validate) {
-    if (!stdr::equal(in, gold))
-      throw bool{};
-  }
+    std::chrono::duration<double> diff = finish - start;
+    std::cout << name << ", " << diff.count() << "\n";
+
+    if (validate) {
+      if (!stdr::equal(out, gold))
+        throw bool{};
+    }
+  };
+
+  #define BENCHMARK(f) benchmark(f, #f)
+
+  BENCHMARK(inclusive_scan_upsweep_downsweep);
+  BENCHMARK(inclusive_scan_decoupled_lookback);
 }
 
