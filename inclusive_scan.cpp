@@ -57,7 +57,7 @@ struct scan_tile_state {
     prefixes[i].state.notify_all();
   }
 
-  T get_predecessor_prefix(std::uint32_t i) {
+  T wait_for_predecessor_prefix(std::uint32_t i) {
     T predecessor_prefix = {};
     for (auto p = i - 1; p >= 0; --p) {
       auto state = prefixes[p].state.load(std::memory_order_acquire);
@@ -128,7 +128,7 @@ auto inclusive_scan_decoupled_lookback = [] (stdr::range auto&& in,
         *--std::inclusive_scan(begin(sub_in), end(sub_in), begin(sub_out)));
 
       if (tile != 0) {
-        auto pred = sts.get_predecessor_prefix(tile);
+        auto pred = sts.wait_for_predecessor_prefix(tile);
         stdr::for_each(sub_out, [&] (auto& e) { e = pred + e; });
       }
     });
