@@ -92,50 +92,44 @@ auto chunk_by_three_pass = [] (stdr::range auto&& in,
                                auto&& out,
                                auto op,
                                std::uint32_t) {
-  std::vector<std::uint8_t> flags(size(in), false);
-
-  auto adj = in | stdv::adjacent<2>;
-  std::transform(stde::par, begin(adj), end(adj), begin(flags),
-    [&] (auto lr) { auto [l, r] = lr;
-      return op(l, r);
-    });
-
   struct interval {
-    bool gap;
+    bool flag;
     std::uint32_t index;
     std::uint32_t start;
     std::uint32_t end;
   };
 
-  std::vector<interval> intervals(size(in));
+  std::vector<interval> intervals(size(in) + 1);
 
-  auto flags_as_interval = flags
-                         | stdv::transform([] (bool b)
-                                           { return interval{b, 0, 0, 1}; });
-  std::exclusive_scan(stde::par,
-    begin(flags_as_interval), end(flags_as_interval),
+  intervals[0] = interval{true, 0, 0, 1};
+
+  auto adj_in = in | stdv::adjacent<2>;
+  std::transform(stde::par, begin(adj_in), end(adj_in), begin(intervals) + 1,
+    [&] (auto lr) { auto [l, r] = lr;
+      return interval{op(l, r), 0, 0, 1};
+    });
+
+  intervals[size(in)] = interval{false, 0, 0, 1};
+
+  std::inclusive_scan(stde::par,
+    begin(intervals), end(intervals),
     begin(intervals),
-    interval{true, 0, 0, 1},
     [] (auto l, auto r) {
-      return interval{r.gap,
-                      r.gap ? l.index + r.index : l.index + r.index + 1,
-                      r.gap ? l.start + r.start : l.end,
+      return interval{r.flag,
+                      r.flag ? l.index + r.index : l.index + r.index + 1,
+                      r.flag ? l.start + r.start : l.end,
                       l.end + r.end};
     });
 
-//  for (interval i : intervals)
-//    printf("flag %u gap %u index %u start %u end %u\n", flags[i.end - 1], i.gap, i.index, i.start, i.end);
-
-  auto zipped = stdv::zip(flags, intervals);
-  std::for_each(stde::par, begin(zipped), end(zipped),
-    [&] (auto z) { auto [flag, i] = z;
-      if (!flag) {
-        out[i.index] = stdr::subrange(next(begin(in), i.start),
-                                      next(begin(in), i.end));
-      }
+  auto adj_intervals = intervals | stdv::adjacent<2>;
+  std::for_each(stde::par, begin(adj_intervals), end(adj_intervals),
+    [&] (auto lr) { auto [l, r] = lr;
+      if (!r.flag)
+        out[l.index] = stdr::subrange(next(begin(in), l.start),
+                                      next(begin(in), l.end));
     });
 
-  return stdr::subrange(begin(out), next(begin(out), intervals.back().index + 1));
+  return stdr::subrange(begin(out), next(begin(out), intervals.back().index));
 };
 
 auto is_space = [] (auto l, auto r) { return !(l == ' ' || r == ' '); };
@@ -193,29 +187,6 @@ int main(int argc, char** argv) {
     if (validate) {
       static_assert(std::same_as<stdr::range_value_t<decltype(res)>,
                                  stdr::range_value_t<decltype(gold)>>);
-
-/*
-      std::cout << "IN\n";
-      for (auto&& c : in)
-        std::cout << c;
-      std::cout << "\n";
-
-      std::cout << "RES\n";
-      for (auto&& chunk : res) {
-        for (auto&& e : chunk) {
-          std::cout << e;
-        }
-        std::cout << "\n";
-      }
-
-      std::cout << "GOLD\n";
-      for (auto&& chunk : gold) {
-        for (auto&& e : chunk) {
-          std::cout << e;
-        }
-        std::cout << "\n";
-      }
-*/
 
       if (size(res) != size(gold))
         throw int{};
