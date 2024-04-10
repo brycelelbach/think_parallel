@@ -88,75 +88,57 @@ struct scan_tile_state {
   }
 };
 
-auto copy_if_three_pass = [] (stdr::range auto&& in,
-                              stdr::range auto&& out,
-                              auto op,
-                              std::uint32_t) {
-  std::vector<std::uint8_t> flags(size(in));
+auto chunk_by_three_pass = [] (stdr::range auto&& in,
+                               auto&& out,
+                               auto op,
+                               std::uint32_t) {
+  std::vector<std::uint8_t> flags(size(in), false);
 
-  std::transform(stde::par, begin(in), end(in), begin(flags), op);
+  auto adj = in | stdv::adjacent<2>;
+  std::transform(stde::par, begin(adj), end(adj), begin(flags),
+    [&] (auto lr) { auto [l, r] = lr;
+      return op(l, r);
+    });
 
-  std::vector<std::uint32_t> indices(size(in) + 1);
+  struct interval {
+    bool gap;
+    std::uint32_t index;
+    std::uint32_t start;
+    std::uint32_t end;
+  };
 
-  auto flags_as_index = flags
-                      | stdv::transform([] (auto b)
-                                        { return std::uint32_t(b); });
-  std::inclusive_scan(stde::par,
-                      begin(flags_as_index), end(flags_as_index),
-                      begin(indices) + 1);
+  std::vector<interval> intervals(size(in));
 
-  auto zipped = stdv::zip(in, flags, indices);
+  auto flags_as_interval = flags
+                         | stdv::transform([] (bool b)
+                                           { return interval{b, 0, 0, 1}; });
+  std::exclusive_scan(stde::par,
+    begin(flags_as_interval), end(flags_as_interval),
+    begin(intervals),
+    interval{true, 0, 0, 1},
+    [] (auto l, auto r) {
+      return interval{r.gap,
+                      r.gap ? l.index + r.index : l.index + r.index + 1,
+                      r.gap ? l.start + r.start : l.end,
+                      l.end + r.end};
+    });
+
+//  for (interval i : intervals)
+//    printf("flag %u gap %u index %u start %u end %u\n", flags[i.end - 1], i.gap, i.index, i.start, i.end);
+
+  auto zipped = stdv::zip(flags, intervals);
   std::for_each(stde::par, begin(zipped), end(zipped),
-    [&] (auto z) { auto [e, flag, index] = z;
-      if (flag) out[index] = e;
-    });
-
-  return stdr::subrange(begin(out), next(begin(out), indices.back()));
-};
-
-auto copy_if_decoupled_lookback = [] (stdr::range auto&& in,
-                                      stdr::range auto&& out,
-                                      auto op,
-                                      std::uint32_t num_tiles) {
-  scan_tile_state<stdr::range_value_t<decltype(in)>> sts(num_tiles);
-
-  std::atomic<std::uint32_t> tile_counter(0);
-
-  auto all_tiles = stdv::iota(0U, num_tiles);
-  std::for_each(stde::par, begin(all_tiles), end(all_tiles),
-    [&] (auto) {
-      auto tile = tile_counter.fetch_add(1, std::memory_order_release);
-
-      auto sub_in  = range_for_tile(in, tile, num_tiles);
-
-      std::vector<std::uint8_t> flags(size(sub_in));
-      stdr::transform(sub_in, begin(flags), op);
-
-      std::vector<std::uint32_t> indices(size(sub_in) + 1);
-
-      auto flags_as_index = flags
-                          | stdv::transform([] (auto b)
-                                            { return std::uint32_t(b); });
-      sts.set_local_prefix(tile,
-        *--std::inclusive_scan(begin(flags_as_index), end(flags_as_index),
-                               begin(indices) + 1));
-
-      if (tile != 0) {
-        auto pred = sts.wait_for_predecessor_prefix(tile);
-        stdr::for_each(indices, [&] (auto& e) { e = pred + e; });
+    [&] (auto z) { auto [flag, i] = z;
+      if (!flag) {
+        out[i.index] = stdr::subrange(next(begin(in), i.start),
+                                      next(begin(in), i.end));
       }
-
-      stdr::for_each(stdv::zip(sub_in, flags, indices),
-        [&] (auto z) { auto [e, flag, index] = z;
-          if (flag) out[index] = e;
-        });
     });
 
-  return stdr::subrange(begin(out),
-    next(begin(out), sts.prefixes[num_tiles - 1].cumulative));
+  return stdr::subrange(begin(out), next(begin(out), intervals.back().index + 1));
 };
 
-auto is_negative = [] (auto e) { return e < 0; };
+auto is_space = [] (auto l, auto r) { return !(l == ' ' || r == ' '); };
 
 int main(int argc, char** argv) {
   std::uint32_t num_elements = 1024 * 1024 * 1024;
@@ -175,24 +157,24 @@ int main(int argc, char** argv) {
   std::cout << "Validate, " << std::boolalpha << validate << "\n";
   std::cout << "\n";
 
-  std::vector<std::int32_t> in(num_elements);
+  std::vector<char> in(num_elements);
   auto all_tiles = stdv::iota(0U, num_tiles);
   std::for_each(stde::par, begin(all_tiles), end(all_tiles),
     [&] (std::uint32_t tile) {
       auto sub_in = range_for_tile(in, tile, num_tiles);
 
       std::minstd_rand gen(tile);
-      std::uniform_int_distribution<std::int32_t> dis(-100, 100);
+      std::uniform_int_distribution<std::uint8_t> dis(0, 26);
 
-      stdr::generate(sub_in, [&] { return dis(gen); });
+      constexpr std::string_view charset = "abcdefghijklmnopqrstuvxyz ";
+      stdr::generate(sub_in, [&] { return charset[dis(gen)]; });
     });
 
-  std::vector<std::int32_t> out(num_elements);
-
-  std::vector<std::int32_t> gold;
+  std::vector<stdr::subrange<std::vector<char>::iterator>> out(num_elements);
+  std::vector<stdr::subrange<std::vector<char>::iterator>> gold;
   if (validate) {
     gold.resize(num_elements);
-    auto end = stdr::copy_if(in, begin(gold), is_negative).out;
+    auto end = stdr::copy(in | stdv::chunk_by(is_space), begin(gold)).out;
     gold.resize(distance(begin(gold), end));
   }
 
@@ -201,7 +183,7 @@ int main(int argc, char** argv) {
   auto benchmark = [&] (auto f, std::string_view name) {
     auto start = std::chrono::high_resolution_clock::now();
 
-    auto res = f(in, out, is_negative, num_tiles);
+    auto res = f(in, out, is_space, num_tiles);
 
     auto finish = std::chrono::high_resolution_clock::now();
 
@@ -209,17 +191,43 @@ int main(int argc, char** argv) {
     std::cout << name << ", " << diff.count() << "\n";
 
     if (validate) {
+      static_assert(std::same_as<stdr::range_value_t<decltype(res)>,
+                                 stdr::range_value_t<decltype(gold)>>);
+
+/*
+      std::cout << "IN\n";
+      for (auto&& c : in)
+        std::cout << c;
+      std::cout << "\n";
+
+      std::cout << "RES\n";
+      for (auto&& chunk : res) {
+        for (auto&& e : chunk) {
+          std::cout << e;
+        }
+        std::cout << "\n";
+      }
+
+      std::cout << "GOLD\n";
+      for (auto&& chunk : gold) {
+        for (auto&& e : chunk) {
+          std::cout << e;
+        }
+        std::cout << "\n";
+      }
+*/
+
       if (size(res) != size(gold))
         throw int{};
 
-      if (!stdr::equal(res, gold))
+      if (!stdr::equal(res, gold, [] (auto&& l, auto&& r)
+                                  { return stdr::equal(l, r); }))
         throw bool{};
     }
   };
 
   #define BENCHMARK(f) benchmark(f, #f)
 
-  BENCHMARK(copy_if_three_pass);
-  BENCHMARK(copy_if_decoupled_lookback);
+  BENCHMARK(chunk_by_three_pass);
 }
 

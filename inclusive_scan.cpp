@@ -151,21 +151,21 @@ int main(int argc, char** argv) {
   std::cout << "Validate, " << std::boolalpha << validate << "\n";
   std::cout << "\n";
 
-  std::vector<std::uint32_t> in(num_elements);
+  std::vector<std::int32_t> in(num_elements);
   auto all_tiles = stdv::iota(0U, num_tiles);
   std::for_each(stde::par, begin(all_tiles), end(all_tiles),
     [&] (std::uint32_t tile) {
       auto sub_in = range_for_tile(in, tile, num_tiles);
 
       std::minstd_rand gen(tile);
-      std::uniform_int_distribution<std::uint32_t> dis(0, 100);
+      std::uniform_int_distribution<std::int32_t> dis(-100, 100);
 
       stdr::generate(sub_in, [&] { return dis(gen); });
     });
 
-  std::vector<std::uint32_t> out(num_elements);
+  std::vector<std::int32_t> out(num_elements);
 
-  std::vector<std::uint32_t> gold;
+  std::vector<std::int32_t> gold;
   if (validate) {
     gold.resize(num_elements);
     std::inclusive_scan(begin(in), end(in), begin(gold));
