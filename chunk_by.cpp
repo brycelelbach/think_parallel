@@ -88,17 +88,24 @@ struct scan_tile_state {
   }
 };
 
+struct interval {
+  bool flag = true;
+  std::uint32_t index = 0;
+  std::uint32_t start = 0;
+  std::uint32_t end = 0;
+};
+
+interval operator+(interval l, interval r) {
+  return {r.flag,
+          r.flag ? l.index + r.index : l.index + r.index + 1,
+          r.flag ? l.start + r.start : l.end,
+          l.end + r.end};
+}
+
 auto chunk_by_three_pass = [] (stdr::range auto&& in,
-                               auto&& out,
+                               stdr::range auto&& out,
                                auto op,
                                std::uint32_t) {
-  struct interval {
-    bool flag;
-    std::uint32_t index;
-    std::uint32_t start;
-    std::uint32_t end;
-  };
-
   std::vector<interval> intervals(size(in) + 1);
 
   intervals[0] = interval{true, 0, 0, 1};
@@ -121,6 +128,10 @@ auto chunk_by_three_pass = [] (stdr::range auto&& in,
                       l.end + r.end};
     });
 
+  for (interval i : intervals)
+    printf("u flag %u index %u start %u end %u\n",
+      i.flag, i.index, i.start, i.end);
+
   auto adj_intervals = intervals | stdv::adjacent<2>;
   std::for_each(stde::par, begin(adj_intervals), end(adj_intervals),
     [&] (auto lr) { auto [l, r] = lr;
@@ -130,6 +141,66 @@ auto chunk_by_three_pass = [] (stdr::range auto&& in,
     });
 
   return stdr::subrange(begin(out), next(begin(out), intervals.back().index));
+};
+
+auto chunk_by_decoupled_lookback = [] (stdr::range auto&& in,
+                                       stdr::range auto&& out,
+                                       auto op,
+                                       std::uint32_t num_tiles) {
+  scan_tile_state<interval> sts(num_tiles);
+
+  std::atomic<std::uint32_t> tile_counter(0);
+
+  auto all_tiles = stdv::iota(0U, num_tiles);
+  std::for_each(stde::par, begin(all_tiles), end(all_tiles),
+    [&] (auto) {
+      auto tile = tile_counter.fetch_add(1, std::memory_order_release);
+
+      bool is_last_tile = tile == num_tiles - 1;
+
+      auto sub_in = range_for_tile(in, tile, num_tiles);
+      if (tile != 0)
+        sub_in = stdr::subrange(--begin(sub_in), end(sub_in));
+
+      std::vector<interval> intervals(size(sub_in) + is_last_tile);
+
+      if (tile == 0)
+        intervals[0] = interval{true, 0, 0, 1};
+
+      auto adj_in = sub_in | stdv::adjacent<2>;
+      std::transform(stde::par, begin(adj_in), end(adj_in), begin(intervals) + 1,
+        [&] (auto lr) { auto [l, r] = lr;
+          return interval{op(l, r), 0, 0, 1};
+        });
+
+      if (is_last_tile)
+        intervals[size(sub_in)] = interval{false, 0, 0, 1};
+
+      sts.set_local_prefix(tile,
+        *--std::inclusive_scan(stde::par,
+                               begin(intervals), end(intervals),
+                               begin(intervals)));
+
+      if (tile != 0) {
+        auto pred = sts.wait_for_predecessor_prefix(tile);
+        stdr::for_each(intervals, [&] (auto& e) { e = pred + e; });
+      }
+
+      for (interval i : intervals)
+        printf("global tile %u flag %u index %u start %u end %u\n",
+          tile, i.flag, i.index, i.start, i.end);
+
+      auto adj_intervals = intervals | stdv::adjacent<2>;
+      std::for_each(stde::par, begin(adj_intervals), end(adj_intervals),
+        [&] (auto lr) { auto [l, r] = lr;
+          if (!r.flag)
+            out[l.index] = stdr::subrange(next(begin(in), l.start),
+                                          next(begin(in), l.end));
+        });
+    });
+
+  return stdr::subrange(begin(out),
+    next(begin(out), sts.prefixes[num_tiles - 1].cumulative.index));
 };
 
 auto is_space = [] (auto l, auto r) { return !(l == ' ' || r == ' '); };
@@ -188,6 +259,27 @@ int main(int argc, char** argv) {
       static_assert(std::same_as<stdr::range_value_t<decltype(res)>,
                                  stdr::range_value_t<decltype(gold)>>);
 
+      std::cout << "IN\n";
+      for (auto e : in)
+        std::cout << e;
+      std::cout << "\n";
+
+      std::cout << "RES\n";
+      for (auto chunk : res) {
+        for (auto e : chunk)
+          std::cout << e;
+        std::cout << "\n";
+      }
+      std::cout << "\n";
+
+      std::cout << "GOLD\n";
+      for (auto chunk : gold) {
+        for (auto e : chunk)
+          std::cout << e;
+        std::cout << "\n";
+      }
+      std::cout << "\n";
+
       if (size(res) != size(gold))
         throw int{};
 
@@ -200,5 +292,6 @@ int main(int argc, char** argv) {
   #define BENCHMARK(f) benchmark(f, #f)
 
   BENCHMARK(chunk_by_three_pass);
+  BENCHMARK(chunk_by_decoupled_lookback);
 }
 
