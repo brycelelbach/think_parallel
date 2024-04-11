@@ -98,7 +98,7 @@ struct interval {
 interval operator+(interval l, interval r) {
   return {r.flag,
           l.index + r.index,
-          r.flag ? l.start + r.start : l.end + r.start,
+          l.index == l.index + r.index ? l.start + r.start : r.start,
           l.end + r.end};
 }
 
@@ -166,17 +166,17 @@ auto chunk_by_decoupled_lookback = [] (stdr::range auto&& in,
       std::vector<interval> intervals(size(sub_in) - (tile != 0) + is_last_tile);
 
       if (tile == 0)
-        intervals[0] = interval{true, 0, 0, 1};
+        intervals[0] = interval{true, 0, 1, 1};
 
       auto adj_in = sub_in | stdv::adjacent<2>;
       std::transform(stde::par, begin(adj_in), end(adj_in), begin(intervals) + (tile == 0),
         [&] (auto lr) { auto [l, r] = lr;
           bool b = op(l, r);
-          return interval{b, !b, 0, 1};
+          return interval{b, !b, 1, 1};
         });
 
       if (is_last_tile)
-        intervals.back() = interval{false, 1, 0, 1};
+        intervals.back() = interval{false, 1, 1, 1};
 
       sts.set_local_prefix(tile,
         *--std::inclusive_scan(stde::par,
@@ -185,20 +185,20 @@ auto chunk_by_decoupled_lookback = [] (stdr::range auto&& in,
 
       if (tile != 0) {
         auto pred = sts.wait_for_predecessor_prefix(tile);
-        printf("predecessor for tile %u flag %u index %u start %u end %u\n",
+        printf("predecessor for tile %u flag %u index %u count %u end %u\n",
           tile, pred.flag, pred.index, pred.start, pred.end);
         stdr::for_each(intervals, [&] (auto& e) { e = pred + e; });
       }
 
       for (interval i : intervals)
-        printf("global tile %u flag %u index %u start %u end %u\n",
+        printf("global tile %u flag %u index %u count %u end %u\n",
           tile, i.flag, i.index, i.start, i.end);
 
       auto adj_intervals = intervals | stdv::adjacent<2>;
       std::for_each(stde::par, begin(adj_intervals), end(adj_intervals),
         [&] (auto lr) { auto [l, r] = lr;
           if (!r.flag)
-            out[l.index] = stdr::subrange(next(begin(in), l.start),
+            out[l.index] = stdr::subrange(next(begin(in), l.end - l.start),
                                           next(begin(in), l.end));
         });
     });
