@@ -97,8 +97,8 @@ struct interval {
 
 interval operator+(interval l, interval r) {
   return {r.flag,
-          r.flag ? l.index + r.index : l.index + r.index + 1,
-          r.flag ? l.start + r.start : l.end,
+          l.index + r.index,
+          r.flag ? l.start + r.start : l.end + r.start,
           l.end + r.end};
 }
 
@@ -113,23 +113,24 @@ auto chunk_by_three_pass = [] (stdr::range auto&& in,
   auto adj_in = in | stdv::adjacent<2>;
   std::transform(stde::par, begin(adj_in), end(adj_in), begin(intervals) + 1,
     [&] (auto lr) { auto [l, r] = lr;
-      return interval{op(l, r), 0, 0, 1};
+      bool b = op(l, r);
+      return interval{b, !b, 0, 1};
     });
 
-  intervals[size(in)] = interval{false, 0, 0, 1};
+  intervals[size(in)] = interval{false, 1, 0, 1};
 
   std::inclusive_scan(stde::par,
     begin(intervals), end(intervals),
     begin(intervals),
     [] (auto l, auto r) {
       return interval{r.flag,
-                      r.flag ? l.index + r.index : l.index + r.index + 1,
-                      r.flag ? l.start + r.start : l.end,
+                      l.index + r.index,
+                      r.flag ? l.start + r.start : l.end + r.start,
                       l.end + r.end};
     });
 
   for (interval i : intervals)
-    printf("u flag %u index %u start %u end %u\n",
+    printf("flag %u index %u start %u end %u\n",
       i.flag, i.index, i.start, i.end);
 
   auto adj_intervals = intervals | stdv::adjacent<2>;
@@ -162,19 +163,20 @@ auto chunk_by_decoupled_lookback = [] (stdr::range auto&& in,
       if (tile != 0)
         sub_in = stdr::subrange(--begin(sub_in), end(sub_in));
 
-      std::vector<interval> intervals(size(sub_in) + is_last_tile);
+      std::vector<interval> intervals(size(sub_in) - (tile != 0) + is_last_tile);
 
       if (tile == 0)
         intervals[0] = interval{true, 0, 0, 1};
 
       auto adj_in = sub_in | stdv::adjacent<2>;
-      std::transform(stde::par, begin(adj_in), end(adj_in), begin(intervals) + 1,
+      std::transform(stde::par, begin(adj_in), end(adj_in), begin(intervals) + (tile == 0),
         [&] (auto lr) { auto [l, r] = lr;
-          return interval{op(l, r), 0, 0, 1};
+          bool b = op(l, r);
+          return interval{b, !b, 0, 1};
         });
 
       if (is_last_tile)
-        intervals[size(sub_in)] = interval{false, 0, 0, 1};
+        intervals.back() = interval{false, 1, 0, 1};
 
       sts.set_local_prefix(tile,
         *--std::inclusive_scan(stde::par,
@@ -183,6 +185,8 @@ auto chunk_by_decoupled_lookback = [] (stdr::range auto&& in,
 
       if (tile != 0) {
         auto pred = sts.wait_for_predecessor_prefix(tile);
+        printf("predecessor for tile %u flag %u index %u start %u end %u\n",
+          tile, pred.flag, pred.index, pred.start, pred.end);
         stdr::for_each(intervals, [&] (auto& e) { e = pred + e; });
       }
 
