@@ -98,7 +98,7 @@ struct interval {
 interval operator+(interval l, interval r) {
   return {r.flag,
           l.index + r.index,
-          l.index == l.index + r.index ? l.count + r.count : r.count,
+          r.index ? r.count : l.count + r.count,
           l.end + r.end};
 }
 
@@ -117,7 +117,7 @@ auto chunk_by_three_pass = [] (stdr::range auto&& in,
       return interval{b, !b, 1, 1};
     });
 
-  intervals[size(in)] = interval{false, 1,  1, 1};
+  intervals[size(in)] = interval{false, 1, 1, 1};
 
   std::inclusive_scan(stde::par,
                       begin(intervals), end(intervals), begin(intervals));
