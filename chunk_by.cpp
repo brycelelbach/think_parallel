@@ -192,7 +192,7 @@ auto chunk_by_decoupled_lookback = [] (stdr::range auto&& in,
     next(begin(out), sts.prefixes[num_tiles - 1].complete.index));
 };
 
-auto is_space = [] (auto l, auto r) { return !(l == ' ' || r == ' '); };
+auto is_not_space = [] (auto l, auto r) { return !(l == ' ' || r == ' '); };
 
 int main(int argc, char** argv) {
   std::uint32_t num_elements = 1024 * 1024 * 1024;
@@ -228,7 +228,7 @@ int main(int argc, char** argv) {
   std::vector<stdr::subrange<std::vector<char>::iterator>> gold;
   if (validate) {
     gold.resize(num_elements);
-    auto end = stdr::copy(in | stdv::chunk_by(is_space), begin(gold)).out;
+    auto end = stdr::copy(in | stdv::chunk_by(is_not_space), begin(gold)).out;
     gold.resize(distance(begin(gold), end));
   }
 
@@ -237,7 +237,7 @@ int main(int argc, char** argv) {
   auto benchmark = [&] (auto f, std::string_view name) {
     auto start = std::chrono::high_resolution_clock::now();
 
-    auto res = f(in, out, is_space, num_tiles);
+    auto res = f(in, out, is_not_space, num_tiles);
 
     auto finish = std::chrono::high_resolution_clock::now();
 
