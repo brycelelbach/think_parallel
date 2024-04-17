@@ -32,12 +32,12 @@ struct scan_tile_state {
   enum status {
     status_unavailable,
     status_local,
-    status_cumulative
+    status_complete
   };
 
   struct descriptor {
     T local = {};
-    T cumulative = {};
+    T complete = {};
     std::atomic<status> state = status_unavailable;
   };
 
@@ -48,8 +48,8 @@ struct scan_tile_state {
   void set_local_prefix(std::uint32_t i, T local) {
     if (i == 0) {
       prefixes[i].local = local;
-      prefixes[i].cumulative = local;
-      prefixes[i].state.store(status_cumulative,
+      prefixes[i].complete = local;
+      prefixes[i].state.store(status_complete,
                               std::memory_order_release);
     } else {
       prefixes[i].local = local;
@@ -71,16 +71,16 @@ struct scan_tile_state {
       if (state == status_local) {
         predecessor_prefix = prefixes[p].local
                            + predecessor_prefix;
-      } else if (state == status_cumulative) {
-        predecessor_prefix = prefixes[p].cumulative
+      } else if (state == status_complete) {
+        predecessor_prefix = prefixes[p].complete
                            + predecessor_prefix;
         break;
       }
     }
 
-    prefixes[i].cumulative = predecessor_prefix
+    prefixes[i].complete = predecessor_prefix
                            + prefixes[i].local;
-    prefixes[i].state.store(status_cumulative,
+    prefixes[i].state.store(status_complete,
                             std::memory_order_release);
     prefixes[i].state.notify_all();
 
@@ -89,7 +89,7 @@ struct scan_tile_state {
 };
 
 auto copy_if_three_pass = [] (stdr::range auto&& in,
-                              stdr::range auto&& out,
+                              auto out,
                               auto op,
                               std::uint32_t) {
   std::vector<std::uint8_t> flags(size(in));
@@ -111,11 +111,11 @@ auto copy_if_three_pass = [] (stdr::range auto&& in,
       if (flag) out[index] = e;
     });
 
-  return stdr::subrange(begin(out), next(begin(out), indices.back()));
+  return stdr::subrange(out, next(out, indices.back()));
 };
 
 auto copy_if_decoupled_lookback = [] (stdr::range auto&& in,
-                                      stdr::range auto&& out,
+                                      auto out,
                                       auto op,
                                       std::uint32_t num_tiles) {
   scan_tile_state<std::uint32_t> sts(num_tiles);
@@ -152,8 +152,7 @@ auto copy_if_decoupled_lookback = [] (stdr::range auto&& in,
         });
     });
 
-  return stdr::subrange(begin(out),
-    next(begin(out), sts.prefixes[num_tiles - 1].cumulative));
+  return stdr::subrange(out, next(out, sts.prefixes[num_tiles - 1].complete));
 };
 
 auto is_negative = [] (auto e) { return e < 0; };
@@ -201,7 +200,7 @@ int main(int argc, char** argv) {
   auto benchmark = [&] (auto f, std::string_view name) {
     auto start = std::chrono::high_resolution_clock::now();
 
-    auto res = f(in, out, is_negative, num_tiles);
+    auto res = f(in, begin(out), is_negative, num_tiles);
 
     auto finish = std::chrono::high_resolution_clock::now();
 
