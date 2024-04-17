@@ -118,7 +118,7 @@ auto copy_if_decoupled_lookback = [] (stdr::range auto&& in,
                                       stdr::range auto&& out,
                                       auto op,
                                       std::uint32_t num_tiles) {
-  scan_tile_state<stdr::range_value_t<decltype(in)>> sts(num_tiles);
+  scan_tile_state<std::uint32_t> sts(num_tiles);
 
   std::atomic<std::uint32_t> tile_counter(0);
 
@@ -127,7 +127,7 @@ auto copy_if_decoupled_lookback = [] (stdr::range auto&& in,
     [&] (auto) {
       auto tile = tile_counter.fetch_add(1, std::memory_order_release);
 
-      auto sub_in  = range_for_tile(in, tile, num_tiles);
+      auto sub_in = range_for_tile(in, tile, num_tiles);
 
       std::vector<std::uint8_t> flags(size(sub_in));
       stdr::transform(sub_in, begin(flags), op);
