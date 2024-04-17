@@ -108,32 +108,25 @@ auto chunk_by_three_pass = [] (stdr::range auto&& in,
                                std::uint32_t) {
   std::vector<interval> intervals(size(in) + 1);
 
-  intervals[0] = interval{true, 0, 0, 1};
+  intervals[0] = interval{true, 0, 1, 1};
 
   auto adj_in = in | stdv::adjacent<2>;
   std::transform(stde::par, begin(adj_in), end(adj_in), begin(intervals) + 1,
     [&] (auto lr) { auto [l, r] = lr;
       bool b = op(l, r);
-      return interval{b, !b, 0, 1};
+      return interval{b, !b, 1, 1};
     });
 
-  intervals[size(in)] = interval{false, 1, 0, 1};
+  intervals[size(in)] = interval{false, 1,  1, 1};
 
   std::inclusive_scan(stde::par,
-    begin(intervals), end(intervals),
-    begin(intervals),
-    [] (auto l, auto r) {
-      return interval{r.flag,
-                      l.index + r.index,
-                      r.flag ? l.count + r.count : l.end + r.count,
-                      l.end + r.end};
-    });
+                      begin(intervals), end(intervals), begin(intervals));
 
   auto adj_intervals = intervals | stdv::adjacent<2>;
   std::for_each(stde::par, begin(adj_intervals), end(adj_intervals),
     [&] (auto lr) { auto [l, r] = lr;
       if (!r.flag)
-        out[l.index] = stdr::subrange(next(begin(in), l.count),
+        out[l.index] = stdr::subrange(next(begin(in), l.end - l.count),
                                       next(begin(in), l.end));
     });
 
@@ -167,7 +160,7 @@ auto chunk_by_decoupled_lookback = [] (stdr::range auto&& in,
         intervals[0] = interval{true, 0, 1, 1};
 
       auto adj_in = sub_in | stdv::adjacent<2>;
-      std::transform(stde::par, begin(adj_in), end(adj_in), begin(intervals) + (tile == 0),
+      std::transform(stde::par, begin(adj_in), end(adj_in), begin(intervals) + is_first_tile,
         [&] (auto lr) { auto [l, r] = lr;
           bool b = op(l, r);
           return interval{b, !b, 1, 1};
