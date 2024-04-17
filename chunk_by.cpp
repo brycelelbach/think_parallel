@@ -91,14 +91,14 @@ struct scan_tile_state {
 struct interval {
   bool flag = true;
   std::uint32_t index = 0;
-  std::uint32_t start = 0;
+  std::uint32_t count = 0;
   std::uint32_t end = 0;
 };
 
 interval operator+(interval l, interval r) {
   return {r.flag,
           l.index + r.index,
-          l.index == l.index + r.index ? l.start + r.start : r.start,
+          l.index == l.index + r.index ? l.count + r.count : r.count,
           l.end + r.end};
 }
 
@@ -125,19 +125,15 @@ auto chunk_by_three_pass = [] (stdr::range auto&& in,
     [] (auto l, auto r) {
       return interval{r.flag,
                       l.index + r.index,
-                      r.flag ? l.start + r.start : l.end + r.start,
+                      r.flag ? l.count + r.count : l.end + r.count,
                       l.end + r.end};
     });
-
-  for (interval i : intervals)
-    printf("flag %u index %u start %u end %u\n",
-      i.flag, i.index, i.start, i.end);
 
   auto adj_intervals = intervals | stdv::adjacent<2>;
   std::for_each(stde::par, begin(adj_intervals), end(adj_intervals),
     [&] (auto lr) { auto [l, r] = lr;
       if (!r.flag)
-        out[l.index] = stdr::subrange(next(begin(in), l.start),
+        out[l.index] = stdr::subrange(next(begin(in), l.count),
                                       next(begin(in), l.end));
     });
 
@@ -157,15 +153,17 @@ auto chunk_by_decoupled_lookback = [] (stdr::range auto&& in,
     [&] (auto) {
       auto tile = tile_counter.fetch_add(1, std::memory_order_release);
 
+      bool is_first_tile = tile == 0;
       bool is_last_tile = tile == num_tiles - 1;
+      bool is_interior_tile = tile > 0 && tile < num_tiles - 1;
 
       auto sub_in = range_for_tile(in, tile, num_tiles);
-      if (tile != 0)
+      if (!is_first_tile)
         sub_in = stdr::subrange(--begin(sub_in), end(sub_in));
 
-      std::vector<interval> intervals(size(sub_in) - (tile != 0) + is_last_tile);
+      std::vector<interval> intervals(size(sub_in) - is_interior_tile);
 
-      if (tile == 0)
+      if (is_first_tile)
         intervals[0] = interval{true, 0, 1, 1};
 
       auto adj_in = sub_in | stdv::adjacent<2>;
@@ -183,22 +181,16 @@ auto chunk_by_decoupled_lookback = [] (stdr::range auto&& in,
                                begin(intervals), end(intervals),
                                begin(intervals)));
 
-      if (tile != 0) {
+      if (!is_first_tile) {
         auto pred = sts.wait_for_predecessor_prefix(tile);
-        printf("predecessor for tile %u flag %u index %u count %u end %u\n",
-          tile, pred.flag, pred.index, pred.start, pred.end);
         stdr::for_each(intervals, [&] (auto& e) { e = pred + e; });
       }
-
-      for (interval i : intervals)
-        printf("global tile %u flag %u index %u count %u end %u\n",
-          tile, i.flag, i.index, i.start, i.end);
 
       auto adj_intervals = intervals | stdv::adjacent<2>;
       std::for_each(stde::par, begin(adj_intervals), end(adj_intervals),
         [&] (auto lr) { auto [l, r] = lr;
           if (!r.flag)
-            out[l.index] = stdr::subrange(next(begin(in), l.end - l.start),
+            out[l.index] = stdr::subrange(next(begin(in), l.end - l.count),
                                           next(begin(in), l.end));
         });
     });
@@ -262,27 +254,6 @@ int main(int argc, char** argv) {
     if (validate) {
       static_assert(std::same_as<stdr::range_value_t<decltype(res)>,
                                  stdr::range_value_t<decltype(gold)>>);
-
-      std::cout << "IN\n";
-      for (auto e : in)
-        std::cout << e;
-      std::cout << "\n";
-
-      std::cout << "RES\n";
-      for (auto chunk : res) {
-        for (auto e : chunk)
-          std::cout << e;
-        std::cout << "\n";
-      }
-      std::cout << "\n";
-
-      std::cout << "GOLD\n";
-      for (auto chunk : gold) {
-        for (auto e : chunk)
-          std::cout << e;
-        std::cout << "\n";
-      }
-      std::cout << "\n";
 
       if (size(res) != size(gold))
         throw int{};
