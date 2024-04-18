@@ -117,7 +117,7 @@ auto chunk_by_three_pass = [] (stdr::range auto&& in,
       return interval{b, !b, 1, 1};
     });
 
-  intervals[size(in)] = interval{false, 1, 1, 1};
+  intervals.back() = interval{false, 1, 1, 1};
 
   std::inclusive_scan(stde::par,
                       begin(intervals), end(intervals), begin(intervals));
@@ -146,8 +146,8 @@ auto chunk_by_decoupled_lookback = [] (stdr::range auto&& in,
     [&] (auto) {
       auto tile = tile_counter.fetch_add(1, std::memory_order_release);
 
-      bool is_first_tile = tile == 0;
-      bool is_last_tile = tile == num_tiles - 1;
+      bool is_first_tile    = tile == 0;
+      bool is_last_tile     = tile == num_tiles - 1;
       bool is_interior_tile = tile > 0 && tile < num_tiles - 1;
 
       auto sub_in = range_for_tile(in, tile, num_tiles);
