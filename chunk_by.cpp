@@ -160,7 +160,7 @@ auto chunk_by_decoupled_lookback = [] (stdr::range auto&& in,
         intervals[0] = interval{true, 0, 1, 1};
 
       auto adj_in = sub_in | stdv::adjacent<2>;
-      std::transform(stde::par, begin(adj_in), end(adj_in), begin(intervals) + is_first_tile,
+      std::transform(begin(adj_in), end(adj_in), begin(intervals) + is_first_tile,
         [&] (auto lr) { auto [l, r] = lr;
           bool b = op(l, r);
           return interval{b, !b, 1, 1};
@@ -170,8 +170,7 @@ auto chunk_by_decoupled_lookback = [] (stdr::range auto&& in,
         intervals.back() = interval{false, 1, 1, 1};
 
       sts.set_local_prefix(tile,
-        *--std::inclusive_scan(stde::par,
-                               begin(intervals), end(intervals),
+        *--std::inclusive_scan(begin(intervals), end(intervals),
                                begin(intervals)));
 
       if (!is_first_tile) {
@@ -180,7 +179,7 @@ auto chunk_by_decoupled_lookback = [] (stdr::range auto&& in,
       }
 
       auto adj_intervals = intervals | stdv::adjacent<2>;
-      std::for_each(stde::par, begin(adj_intervals), end(adj_intervals),
+      std::for_each(begin(adj_intervals), end(adj_intervals),
         [&] (auto lr) { auto [l, r] = lr;
           if (!r.flag)
             out[l.index] = stdr::subrange(next(begin(in), l.end - l.count),
