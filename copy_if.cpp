@@ -125,7 +125,7 @@ auto copy_if_decoupled_lookback = [] (stdr::range auto&& in,
   auto all_tiles = stdv::iota(0U, num_tiles);
   std::for_each(stde::par, begin(all_tiles), end(all_tiles),
     [&] (auto) {
-      auto tile = tile_counter.fetch_add(1, std::memory_order_release);
+      auto tile = tile_counter.fetch_add(1, std::memory_order_relaxed);
 
       auto sub_in = range_for_tile(in, tile, num_tiles);
 

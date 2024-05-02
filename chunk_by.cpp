@@ -144,7 +144,7 @@ auto chunk_by_decoupled_lookback = [] (stdr::range auto&& in,
   auto all_tiles = stdv::iota(0U, num_tiles);
   std::for_each(stde::par, begin(all_tiles), end(all_tiles),
     [&] (auto) {
-      auto tile = tile_counter.fetch_add(1, std::memory_order_release);
+      auto tile = tile_counter.fetch_add(1, std::memory_order_relaxed);
 
       bool is_first_tile    = tile == 0;
       bool is_last_tile     = tile == num_tiles - 1;
